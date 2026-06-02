@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube 歌配信シャッフルプレイヤー</title>
+    <style>
+        body { 
+            font-family: 'Helvetica Neue', Arial, sans-serif; 
+            margin: 0; 
+            padding: 20px; 
+            background: #f9f9f9; 
+            color: #333;
+        }
+        h1 { font-size: 20px; text-align: center; margin-bottom: 20px; }
+        
+        /* 画面全体のレイアウト（PCでは横並び、スマホでは縦並び） */
+        .container {
+            display: flex;
+            flex-direction: column;
+            max-width: 1100px;
+            margin: 0 auto;
+            gap: 20px;
+        }
+        @media (min-width: 768px) {
+            .container { flex-direction: row; }
+        }
+
+        /* 左側：プレイヤーエリア */
+        .player-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        }
+        .video-wrapper {
+            position: relative;
+            width: 100%;
+            padding-top: 56.25%; /* 16:9 アスペクト比 */
+            background: #000;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .video-wrapper iframe, #player {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100% !important;
+            height: 100% !important;
+        }
+        
+        #status-msg { margin: 15px 0 5px; font-size: 15px; font-weight: bold; color: #ff0000; text-align: center; }
+        #playing-title { font-size: 14px; color: #555; margin-bottom: 15px; text-align: center; min-height: 20px; }
+
+        /* コントロールボタン群 */
+        .controls { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; width: 100%; }
+        .btn {
+            padding: 10px 16px;
+            font-size: 14px;
+            cursor: pointer;
+            border: none;
+            border-radius: 4px;
+            font-weight: bold;
+            transition: background 0.2s;
+            background: #e0e0e0;
+            color: #333;
+        }
+        .btn:hover { background: #d0d0d0; }
+        .btn-primary { background: #ff0000; color: white; }
+        .btn-primary:hover { background: #cc0000; }
+        .btn-active { background: #333 !important; color: white !important; }
+
+        /* 右側：プレイリストエリア */
+        .playlist-area {
+            width: 100%;
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+            padding: 15px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            max-height: 500px;
+        }
+        @media (min-width: 768px) {
+            .playlist-area { width: 380px; max-height: 600px; }
+        }
+        .playlist-header {
+            font-size: 16px;
+            font-weight: bold;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #eee;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .playlist-ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            overflow-y: auto;
+            flex: 1;
+        }
+        .playlist-item {
+            padding: 10px;
+            border-bottom: 1px solid #f0f0f0;
+            cursor: pointer;
+            font-size: 13px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            border-radius: 4px;
+        }
+        .playlist-item:hover { background: #f5f5f5; }
+        .playlist-item.active { background: #ffebee; color: #c62828; font-weight: bold; }
+        .song-info { display: flex; flex-direction: column; gap: 2px; }
+        .song-name { font-size: 14px; }
+        .song-time { font-size: 11px; color: #888; }
+        .play-count { font-size: 11px; background: #eee; padding: 2px 6px; border-radius: 10px; color: #666; white-space: nowrap; }
+        .playlist-item.active .play-count { background: #ffcdd2; color: #c62828; }
+    </style>
+</head>
+<body>
+
+    <h1>YouTube 歌配信プレイヤー</h1>
+
+    <div class="container">
+        <div class="player-area">
+            <div class="video-wrapper">
+                <div id="player"></div>
+            </div>
+            
+            <div id="status-msg">プレイヤー準備中...</div>
+            <div id="playing-title"></div>
+            
+            <div class="controls">
+                <button class="btn" onclick="playPrevious()">◀ 前の曲</button>
+                <button class="btn btn-primary" id="play-pause-btn" onclick="togglePlay()">一時停止</button>
+                <button class="btn" onclick="skipNext()">次の曲 ▶</button>
+                <button class="btn" id="shuffle-btn" onclick="toggleShuffle()">シャッフル: OFF</button>
+                <button class="btn" id="repeat-btn" onclick="toggleRepeat()">ループ: 全曲</button>
+                <button class="btn" onclick="resetCounts()" style="font-size:11px; background:#fff; border:1px solid #ccc; color:#999; margin-top:10px;">回数リセット</button>
+            </div>
+        </div>
+
+        <div class="playlist-area">
+            <div class="playlist-header">
+                <span>再生リスト (<span id="total-count">0</span>)</span>
+            </div>
+            <ul class="playlist-ul" id="playlist-container">
+                </ul>
+        </div>
+    </div>
+
+    <script>
+        // --- 【設定】ここに名前(name)を自由に追加してください ---
+        const songList = [
+            { name: '歌枠1曲目：オリ曲', videoId: 'nzZte1EdDX4', start: '10:38', end: '15:17' },
+            { name: '歌枠2曲目：アニソン', videoId: 'nzZte1EdDX4', start: '23:33', end: '27:38' },
+            { name: '歌枠3曲目：ボカロ', videoId: 'nzZte1EdDX4', start: '38:09', end: '42:23' },
+            { name: '歌枠4曲目', videoId: 'nzZte1EdDX4', start: '48:51', end: '53:19' },
+            { name: '歌枠5曲目', videoId: 'nzZte1EdDX4', start: '01:05:18', end: '01:10:09' },
+            { name: '歌枠6曲目', videoId: 'nzZte1EdDX4', start: '01:15:45', end: '01:20:03' },
+            { name: '歌枠7曲目', videoId: 'nzZte1EdDX4', start: '01:27:42', end: '01:31:32' },
+            { name: '歌枠8曲目', videoId: 'nzZte1EdDX4', start: '01:37:14', end: '01:40:19' },
+            { name: '歌枠9曲目', videoId: 'nzZte1EdDX4', start: '01:43:10', end: '01:48:11' },
+            { name: '歌枠10曲目', videoId: 'nzZte1EdDX4', start: '02:05:03', end: '02:09:46' },
+            { name: '別の配信1曲目', videoId: 'YJKmJry_Ur4', start: '10:03', end: '14:39' },
+            { name: '別の配信2曲目', videoId: 'YJKmJry_Ur4', start: '23:21', end: '26:44' },
+            { name: '別の配信3曲目', videoId: 'YJKmJry_Ur4', start: '38:16', end: '42:59' },
+            { name: '別の配信4曲目', videoId: 'YJKmJry_Ur4', start: '48:32', end: '53:54' },
+            { name: '別の配信5曲目', videoId: 'YJKmJry_Ur4', start: '01:02:19', end: '01:08:03' },
+            { name: '別の配信6曲目', videoId: 'YJKmJry_Ur4', start: '01:15:34', end: '01:18:47' },
+            { name: '別の配信7曲目', videoId: 'YJKmJry_Ur4', start: '01:21:45', end: '01:25:45' },
+            { name: '3つ目の配信1', videoId: 'Un7KlL6OUjs', start: '09:33', end: '14:16' },
+            { name: '3つ目の配信2', videoId: 'Un7KlL6OUjs', start: '20:35', end: '23:49' },
+            { name: '3つ目の配信3', videoId: 'Un7KlL6OUjs', start: '36:57', end: '40:57' },
+            { name: '3つ目の配信4', videoId: 'Un7KlL6OUjs', start: '50:08', end: '54:33' },
+            { name: '3つ目の配信5', videoId: 'Un7KlL6OUjs', start: '01:01:59', end: '01:06:43' },
+            { name: '3つ目の配信6', videoId: 'Un7KlL6OUjs', start: '01:15:15', end: '01:19:55' },
+            { name: '3つ目の配信7', videoId: 'Un7KlL6OUjs', start: '01:27:35', end: '01:32:16' },
+            { name: '3つ目の配信8', videoId: 'Un7KlL6OUjs', start: '01:41:32', end: '01:46:25' },
+            { name: '3つ目の配信9', videoId: 'Un7KlL6OUjs', start: '01:51:01', end: '01:55:07' },
+            { name: '3つ目の配信10', videoId: 'Un7KlL6OUjs', start: '02:05:24', end: '02:11:07' },
+            { name: '3つ目の配信11', videoId: 'Un7KlL6OUjs', start: '02:18:27', end: '02:22:37' },
+            { name: '3つ目の配信12', videoId: 'Un7KlL6OUjs', start: '02:26:53', end: '02:29:02' },
+            { name: '4つ目の配信1', videoId: 'J6p6bVpb938', start: '06:38', end: '11:06' },
+            { name: '4つ目の配信2', videoId: 'J6p6bVpb938', start: '14:53', end: '19:30' },
+            { name: '4つ目の配信3', videoId: 'J6p6bVpb938', start: '22:30', end: '27:15' },
+            { name: '4つ目の配信4', videoId: 'J6p6bVpb938', start: '30:50', end: '35:45' },
+            { name: '4つ目の配信5', videoId: 'J6p6bVpb938', start: '45:43', end: '50:25' },
+            { name: '4つ目の配信6', videoId: 'J6p6bVpb938', start: '53:08', end: '56:28' },
+            { name: '4つ目の配信7', videoId: 'J6p6bVpb938', start: '01:09:09', end: '01:13:15' },
+            { name: '4つ目の配信8', videoId: 'J6p6bVpb938', start: '01:14:23', end: '01:17:10' },
+            { name: '4つ目の配信9', videoId: 'J6p6bVpb938', start: '01:34:03', end: '01:38:51' },
+            { name: '4つ目の配信10', videoId: 'J6p6bVpb938', start: '01:44:10', end: '01:48:11' },
+            { name: '5つ目の配信1', videoId: 'lRz9Sa9sVuA', start: '8:13', end: '12:46' },
+            { name: '5つ目の配信2', videoId: 'lRz9Sa9sVuA', start: '26:24', border: '30:40' },
+            { name: '5つ目の配信3', videoId: 'lRz9Sa9sVuA', start: '32:04', end: '36:29' },
+            { name: '5つ目の配信4', videoId: 'lRz9Sa9sVuA', start: '1:12:34', end: '1:18:36' },
+            { name: '5つ目の配信5', videoId: 'lRz9Sa9sVuA', start: '1:21:15', end: '1:25:11' },
+            { name: '5つ目の配信6', videoId: 'lRz9Sa9sVuA', start: '1:30:39', end: '1:34:40' },
+            { name: '5つ目の配信7', videoId: 'lRz9Sa9sVuA', start: '1:36:39', end: '1:40:34' },
+            { name: '5つ目の配信8', videoId: 'lRz9Sa9sVuA', start: '1:52:56', end: '1:56:42' },
+            { name: '5つ目の配信9', videoId: 'lRz9Sa9sVuA', start: '2:12:09', end: '2:17:10' },
+            { name: '5つ目の配信10', videoId: 'lRz9Sa9sVuA', start: '2:21:20', end: '2:25:27' },
+            { name: '6つ目の配信1', videoId: 'GQb-XxU3u0Q', start: '04:09', end: '09:38' },
+            { name: '6つ目の配信2', videoId: 'GQb-XxU3u0Q', start: '11:56', end: '15:27' },
+            { name: '6つ目の配信3', videoId: 'GQb-XxU3u0Q', start: '15:44', end: '20:57' },
+            { name: '6つ目の配信4', videoId: 'GQb-XxU3u0Q', start: '40:52', end: '45:31' },
+            { name: '7つ目の配信1', videoId: 'BsRP0_XLkxg', start: '0:14:11', end: '0:17:41' },
+            { name: '7つ目の配信2', videoId: 'BsRP0_XLkxg', start: '0:22:45', end: '0:27:40' },
+            { name: '7つ目の配信3', videoId: 'BsRP0_XLkxg', start: '0:35:02', end: '0:38:40' },
+            { name: '7つ目の配信4', videoId: 'BsRP0_XLkxg', start: '0:44:43', end: '0:49:12' },
+            { name: '7つ目の配信5', videoId: 'BsRP0_XLkxg', start: '0:56:17', end: '0:59:35' }
+        ];
+
+        // 時間表記を秒に直す関数
+        function timeToSeconds(timeStr) {
+            if(!timeStr) return 0;
+            const parts = timeStr.split(':').map(Number);
+            if (parts.length === 3) {
+                return (parts[0] * 3600) + (parts[1] * 60) + parts[2];
+            } else if (parts.length === 2) {
+                return (parts[0] * 60) + parts[1];
+            }
+            return 0;
+        }
+
+        // リスト初期化処理
+        const formattedList = songList.map((song, index) => ({
+            id: index,
+            name: song.name || `曲項目 ${index + 1}`,
+            videoId: song.videoId,
+            startStr: song.start,
+            endStr: song.end,
+            start: timeToSeconds(song.start),
+            end: timeToSeconds(song.end)
+        }));
+
+        let playbackQueue = [...formattedList]; // 実際の再生順が入る配列
+        let currentQueueIndex = 0;             // 現在のキュー内の再生位置
+        let player;
+        let isShuffle = false;
+        let repeatMode = 'all'; // 'all' (全曲ループ), 'one' (1曲リピート), 'none' (ループなし)
+        let checkTimer; // 秒数監視用タイマー
+
+        // ローカルストレージから再生回数を取得する
+        function getPlayCounts() {
+            const counts = localStorage.getItem('yt_song_play_counts');
+            return counts ? JSON.parse(counts) : {};
+        }
+
+        // 再生回数を保存・カウントアップする
+        function incrementPlayCount(songId) {
+            const counts = getPlayCounts();
+            counts[songId] = (counts[songId] || 0) + 1;
+            localStorage.setItem('yt_song_play_counts', JSON.stringify(counts));
+            updatePlaylistUI(); // 画面の数値を更新
+        }
+
+        // 回数リセット
+        function resetCounts() {
+            if(confirm('すべての再生回数をリセットしますか？')) {
+                localStorage.removeItem('yt_song_play_counts');
+                updatePlaylistUI();
+            }
+        }
+
+        // プレイリストのUIを生成・更新する
+        function updatePlaylistUI() {
+            const container = document.getElementById('playlist-container');
+            container.innerHTML = '';
+            document.getElementById('total-count').innerText = formattedList.length;
+            const counts = getPlayCounts();
+
+            // 現在再生中の曲のIDを取得
+            const currentSong = playbackQueue[currentQueueIndex];
+
+            formattedList.forEach((song) => {
+                const li = document.createElement('li');
+                li.className = 'playlist-item';
+                if (currentSong && song.id === currentSong.id) {
+                    li.className += ' active';
+                }
+
+                const count = counts[song.id] || 0;
+
+                li.innerHTML = `
+                    <div class="song-info">
+                        <span class="song-name">${song.name}</span>
+                        <span class="song-time">⏱ ${song.startStr} 〜 ${song.endStr}</span>
+                    </div>
+                    <span class="play-count">${count}回再生</span>
+                `;
+
+                // クリックでその曲へ移動（スマホ対応強化のためクリックイベントに直結）
+                li.onclick = () => {
+                    selectSongById(song.id);
+                };
+
+                container.appendChild(li);
+            });
+
+            // アクティブな要素までスクロール
+            const activeItem = container.querySelector('.playlist-item.active');
+            if(activeItem) {
+                activeItem.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }
+        }
+
+        // 特定の曲IDを選んで再生する
+        function selectSongById(id) {
+            const indexInQueue = playbackQueue.findIndex(s => s.id === id);
+            if (indexInQueue !== -1) {
+                currentQueueIndex = indexInQueue;
+                playCurrentIndex();
+            }
+        }
+
+        // シャッフルモードの切り替え
+        function toggleShuffle() {
+            isShuffle = !isShuffle;
+            const btn = document.getElementById('shuffle-btn');
+            const currentSong = playbackQueue[currentQueueIndex];
+
+            if (isShuffle) {
+                btn.innerText = "シャッフル: ON";
+                btn.classList.add('btn-active');
+                // 現在の曲以外をシャッフル
+                playbackQueue = playbackQueue.sort(() => Math.random() - 0.5);
+                // 再生中だった曲を先頭（0番目）に持ってくることでスムーズに移行
+                if (currentSong) {
+                    playbackQueue = playbackQueue.filter(s => s.id !== currentSong.id);
+                    playbackQueue.unshift(currentSong);
+                }
+                currentQueueIndex = 0;
+            } else {
+                btn.innerText = "シャッフル: OFF";
+                btn.classList.remove('btn-active');
+                // 元の順番（ID順）に戻す
+                playbackQueue = [...formattedList];
+                if (currentSong) {
+                    currentQueueIndex = playbackQueue.findIndex(s => s.id === currentSong.id);
+                }
+            }
+            updatePlaylistUI();
+        }
+
+        // リピートモードの切り替え
+        function toggleRepeat() {
+            const btn = document.getElementById('repeat-btn');
+            if (repeatMode === 'all') {
+                repeatMode = 'one';
+                btn.innerText = "ループ: 1曲";
+                btn.classList.add('btn-active');
+            } else if (repeatMode === 'one') {
+                repeatMode = 'none';
+                btn.innerText = "ループ: なし";
+                btn.classList.remove('btn-active');
+            } else {
+                repeatMode = 'all';
+                btn.innerText = "ループ: 全曲";
+                btn.classList.remove('btn-active');
+            }
+        }
+
+        // YouTube Iframe API の読み込み
+        const tag = document.createElement('script');
+        tag.src = "https://www.youtube.com/iframe_api";
+        const firstScriptTag = document.getElementsByTagName('script')[0];
+        firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+
+        function onYouTubeIframeAPIReady() {
+            document.getElementById('status-msg').innerText = "「前の曲/次の曲」で再生開始";
+            // プレイヤー初期化 (最初の曲をセットしておく)
+            const firstSong = playbackQueue[0];
+            player = new YT.Player('player', {
+                videoId: firstSong.videoId,
+                playerVars: {
+                    'start': firstSong.start,
+                    'end': firstSong.end,
+                    'autoplay': 0,
+                    'playsinline': 1,
+                    'rel': 0
+                },
+                events: {
+                    'onReady': (e) => { updatePlaylistUI(); },
+                    'onStateChange': onPlayerStateChange
+                }
+            });
+        }
+
+        // 現在のキューインデックスの曲を再生する
+        function playCurrentIndex() {
+            if (currentQueueIndex >= playbackQueue.length) {
+                if (repeatMode === 'all') {
+                    currentQueueIndex = 0; // 全曲ループなら最初に戻る
+                } else {
+                    document.getElementById('status-msg').innerText = 'すべての曲の再生が終わりました！';
+                    return;
+                }
+            }
+            if (currentQueueIndex < 0) {
+                currentQueueIndex = repeatMode === 'all' ? playbackQueue.length - 1 : 0;
+            }
+
+            const song = playbackQueue[currentQueueIndex];
+            document.getElementById('status-msg').innerText = `${currentQueueIndex + 1} / ${playbackQueue.length} 曲目を再生中...`;
+            document.getElementById('playing-title').innerText = song.name;
+
+            // 回数カウントアップ
+            incrementPlayCount(song.id);
+
+            // スマホでの誤作動対策を含めた動画の読み込み
+            player.loadVideoById({
+                videoId: song.videoId,
+                startSeconds: song.start,
+                endSeconds: song.end
+            });
+
+            // スマホ等で終了判定が漏れるのを防ぐ監視タイマー（1秒ごとにチェック）
+            clearInterval(checkTimer);
+            checkTimer = setInterval(() => {
+                if (player && player.getCurrentTime) {
+                    const currentTime = player.getCurrentTime();
+                    // 設定された終了時間の0.5秒前、もしくは超えたら次へ
+                    if (currentTime >= song.end - 0.5) {
+                        clearInterval(checkTimer);
+                        handleSongEnd();
+                    }
+                }
+            }, 1000);
+        }
+
+        // 曲が終了したときの判定処理
+        function handleSongEnd() {
+            if (repeatMode === 'one') {
+                // 1曲リピート
+                playCurrentIndex();
+            } else {
+                // 通常・シャッフル・全曲ループ時は次の曲へ
+                currentQueueIndex++;
+                playCurrentIndex();
+            }
+        }
+
+        function onPlayerStateChange(event) {
+            // 再生ボタンのテキスト制御
+            const btn = document.getElementById('play-pause-btn');
+            if (event.data == YT.PlayerState.PLAYING) {
+                btn.innerText = "一時停止";
+            } else if (event.data == YT.PlayerState.PAUSED) {
+                btn.innerText = "再生";
+            }
+
+            // YouTube公式側が正常にENDEDを検知したとき
+            if (event.data == YT.PlayerState.ENDED) {
+                clearInterval(checkTimer);
+                handleSongEnd();
+            }
+        }
+
+        // ボタン：一時停止・再生の切り替え
+        function togglePlay() {
+            if (!player) return;
+            const state = player.getPlayerState();
+            if (state == YT.PlayerState.PLAYING) {
+                player.pauseVideo();
+            } else {
+                player.playVideo();
+            }
+        }
+
+        // ボタン：次の曲
+        function skipNext() {
+            clearInterval(checkTimer);
+            if (repeatMode === 'one') {
+                currentQueueIndex++; // 1曲ループでも強制的に次へ
+            } else {
+                currentQueueIndex++;
+            }
+            playCurrentIndex();
+        }
+
+        // ボタン：前の曲
+        function playPrevious() {
+            clearInterval(checkTimer);
+            currentQueueIndex--;
+            playCurrentIndex();
+        }
+    </script>
+</body>
+</html>
